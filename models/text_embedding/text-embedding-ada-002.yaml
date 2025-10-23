@@ -1,0 +1,21 @@
+model: text-embedding-ada-002
+label:
+  en_US: OpenAI Text Embedding Ada 002
+model_type: text-embedding
+model_properties:
+  context_size: 8192
+parameter_rules:
+  - name: dimensions
+    type: int
+    label:
+      en_US: Dimensions (1536)
+  - name: encoding_format
+    type: string
+    label:
+      en_US: Encoding Format
+pricing:
+  input: '0.10'
+  unit: '0.000001'
+  currency: USD
+notes:
+  en_US: Legacy ada embeddings. Compatible fallback with broad tooling support.

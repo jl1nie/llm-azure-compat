@@ -1,0 +1,3 @@
+# Managed by uv; see pyproject.toml
+httpx>=0.27
+dify-plugin>=0.5.1,<0.6.0

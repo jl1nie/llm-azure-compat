@@ -1,0 +1,25 @@
+model: o3
+label:
+  en_US: OpenAI o3 (Reasoning)
+model_type: llm
+features:
+  - vision
+  - tool-call
+  - stream-tool-call
+model_properties:
+  mode: chat
+  context_size: 200000
+parameter_rules:
+  - name: max_output_tokens
+    use_template: max_tokens
+  - name: json_response
+    type: boolean
+    default: false
+  - name: json_schema
+    type: string
+  - name: enable_vision
+    type: boolean
+    default: false
+  - name: thinking
+    type: boolean
+    default: true

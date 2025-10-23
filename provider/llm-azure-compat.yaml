@@ -1,0 +1,59 @@
+provider: azure_compatible
+label:
+  en_US: Azure-Compatible Gateway
+description:
+  en_US: Azure-style OpenAI gateway where the deployment ID matches the model name. Supports LLM and Text Embedding.
+supported_model_types:
+  - llm
+  - text-embedding
+configurate_methods:
+  - predefined-model
+
+provider_credential_schema:
+  credential_form_schemas:
+    - variable: base_url
+      label:
+        en_US: Base URL
+      type: text-input
+      required: true
+      placeholder:
+        en_US: https://your-gateway.example.com
+    - variable: api_key
+      label:
+        en_US: API Key
+      type: secret-input
+      required: true
+    - variable: timeout_sync
+      label:
+        en_US: Timeout (sync, seconds)
+      type: text-input
+      required: false
+      default: "60"
+    - variable: timeout_async
+      label:
+        en_US: Timeout (stream, seconds)
+      type: text-input
+      required: false
+      default: "300"
+    - variable: pseudo_sse_chunks
+      label:
+        en_US: Pseudo-SSE chunk count (non-OpenAI)
+      type: text-input
+      required: false
+      default: "2"
+
+models:
+  llm:
+    predefined:
+      - models/llm/*.yaml
+    position: models/llm/_position.yaml
+  text_embedding:
+    predefined:
+      - models/text_embedding/*.yaml
+    position: models/text_embedding/_position.yaml
+extra:
+  python:
+    provider_source: provider/llm-azure-compat.py
+    model_sources:
+      - models/llm/llm.py
+      - models/text_embedding/text_embedding.py

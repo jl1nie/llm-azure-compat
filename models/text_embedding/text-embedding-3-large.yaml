@@ -1,0 +1,21 @@
+model: text-embedding-3-large
+label:
+  en_US: OpenAI Text Embedding 3 Large
+model_type: text-embedding
+model_properties:
+  context_size: 8192
+parameter_rules:
+  - name: dimensions
+    type: int
+    label:
+      en_US: Dimensions (3072)
+  - name: encoding_format
+    type: string
+    label:
+      en_US: Encoding Format
+pricing:
+  input: '0.13'
+  unit: '0.000001'
+  currency: USD
+notes:
+  en_US: 3,072 dims. Highest fidelity for multilingual tasks.
