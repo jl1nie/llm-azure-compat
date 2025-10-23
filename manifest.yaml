@@ -1,0 +1,45 @@
+version: 0.0.2
+type: plugin
+author: jl1nie
+name: llm-azure-compat
+label:
+  en_US: llm-azure-compat
+  ja_JP: llm-azure-compat
+  zh_Hans: llm-azure-compat
+  pt_BR: llm-azure-compat
+description:
+  en_US: LLM provier for Azure Compatible API
+  ja_JP: LLM provier for Azure Compatible API
+  zh_Hans: LLM provier for Azure Compatible API
+  pt_BR: LLM provier for Azure Compatible API
+icon: icon.svg
+icon_dark: icon-dark.svg
+resource:
+  memory: 268435456
+  permission:
+    tool:
+      enabled: true
+    model:
+      enabled: true
+      llm: true
+      text_embedding: true
+      rerank: false
+      tts: false
+      speech2text: false
+      moderation: false
+plugins:
+  models:
+    - provider/llm-azure-compat.yaml
+meta:
+  version: 0.0.2
+  arch:
+    - amd64
+    - arm64
+  runner:
+    language: python
+    version: "3.12"
+    entrypoint: main
+  minimum_dify_version: null
+created_at: 2025-10-23T21:16:04.717608175+09:00
+privacy: PRIVACY.md
+verified: false

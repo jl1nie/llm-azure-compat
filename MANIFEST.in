@@ -1,0 +1,6 @@
+recursive-include models *.yaml *.yml
+recursive-include provider *.yaml *.yml
+recursive-include _assets *.svg
+include README.md
+include GUIDE.md
+include PRIVACY.md
