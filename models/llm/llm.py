@@ -470,7 +470,7 @@ class AzureCompatibleLLM(LargeLanguageModel):
             try:
                 out.append(self._normalize_tool_call(tool))
             except Exception as e:
-                _get_logger().warning("skip invalid tool: %r error=%s", tool, e)
+                # skip invalid tool
                 continue
         return out or None
 

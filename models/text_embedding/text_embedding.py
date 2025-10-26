@@ -139,7 +139,12 @@ class AzureCompatibleEmbedding(TextEmbeddingModel):
         input_type: EmbeddingInputType = EmbeddingInputType.DOCUMENT,
     ) -> TextEmbeddingResult:
         base_url = credentials["base_url"].rstrip("/")
-        endpoint = f"{base_url}/openai/deployments/{model}/embeddings?api-version=fake"
+        use_deployid = bool(credentials.get("use_deployid","true") == "true")
+        if use_deployid:
+            api_version = credentials.get("api_version", "2024-02-15-preview")
+            endpoint = f"{base_url}/openai/deployments/{model}/chat/completions?api-version={api_version}"
+        else:
+            endpoint = f"{base_url}/chat/completions?"
         headers = _headers(credentials["api_key"])
         timeout = float(credentials.get("timeout_sync", 60))
         payload: dict[str, Any] = {"input": texts}
