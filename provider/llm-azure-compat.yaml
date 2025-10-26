@@ -23,6 +23,25 @@ provider_credential_schema:
         en_US: API Key
       type: secret-input
       required: true
+    - variable: api_version
+      label:
+        en_US: API version
+      type: text-input
+      required: false
+      default: "2025-10-21"
+    - variable: use_deployid
+      label:
+        en_US: Use deployment_id path
+      type: select
+      required: false
+      default: "true"
+      options:
+        - value: "true"
+          label:
+            en_US: Yes
+        - value: "false"
+          label:
+            en_US: No
     - variable: timeout_sync
       label:
         en_US: Timeout (sync, seconds)
