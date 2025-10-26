@@ -74,11 +74,91 @@ def _stream_sse(url: str, headers: dict, payload: dict, stream_timeout: float) -
                             return
                         yield data.decode("utf-8", errors="ignore")
 
+def _parse_gateway_error_text(text: str) -> dict:
+    """
+    いろいろなゲートウェイ/SDKが返す error ボディをできるだけ正規化して抽出する。
+    対応パターン:
+      - {"error": {"code": "...", "message": "..."}}
+      - {"error": {"type": "...", "message": "...", "code": "..."}}
+      - {"message": "..."} または {"detail": "..."}
+      - 二重JSON（例: {"message": "{\"error_type\":\"TypeError\",\"message\":\"...\"}"}）
+    """
+    def _coerce_obj(s: str):
+        try:
+            return json.loads(s)
+        except Exception:
+            return None
+
+    obj = _coerce_obj(text) if isinstance(text, str) else None
+    if not obj:
+        return {"code": "unknown_error", "message": text or ""}
+
+    # azure/openai系: {"error": {...}}
+    if isinstance(obj, dict) and "error" in obj and isinstance(obj["error"], dict):
+        err = obj["error"]
+        code = err.get("code") or err.get("type") or "unknown_error"
+        msg = err.get("message") or err.get("msg") or err.get("detail") or ""
+        return {"code": str(code), "message": str(msg)}
+
+    # {"message": "..."} or {"detail": "..."} にネストJSONが入っているケース
+    for k in ("message", "detail"):
+        if k in obj:
+            inner = obj[k]
+            if isinstance(inner, str):
+                nested = _coerce_obj(inner)
+                if isinstance(nested, dict):
+                    # {"error_type": "...", "message": "..."} など
+                    code = nested.get("code") or nested.get("error_type") or "unknown_error"
+                    msg = nested.get("message") or nested.get("detail") or inner
+                    return {"code": str(code), "message": str(msg)}
+                return {"code": "error", "message": inner}
+            elif isinstance(inner, dict):
+                code = inner.get("code") or inner.get("type") or "error"
+                msg = inner.get("message") or inner.get("detail") or ""
+                return {"code": str(code), "message": str(msg)}
+
+    # それ以外は丸ごと
+    return {"code": "unknown_error", "message": text if isinstance(text, str) else json.dumps(obj, ensure_ascii=False)}
+
+def _as_dict(obj: Any, *, default: dict | None = None) -> dict:
+    """Pydantic / dataclass / mapping / JSON文字列 / その他 -> dict に正規化"""
+    if obj is None:
+        return {} if default is None else default
+    try:
+        if hasattr(obj, "model_dump"):
+            d = obj.model_dump(mode="json", exclude_none=True)
+            return d if isinstance(d, dict) else {}
+        if hasattr(obj, "dict"):
+            d = obj.dict(exclude_none=True)
+            return d if isinstance(d, dict) else {}
+        if isinstance(obj, dict):
+            return obj
+        if isinstance(obj, str):
+            try:
+                d = json.loads(obj)
+                return d if isinstance(d, dict) else {}
+            except Exception:
+                return {} if default is None else default
+        # callable や未知のオブジェクトは弾く
+        return {} if default is None else default
+    except Exception:
+        return {} if default is None else default
+
+def _as_number_map(obj: Any) -> dict[str, float]:
+    """OpenAI 互換の logit_bias など: dict[str, float] 以外は空に"""
+    d = _as_dict(obj)
+    out: dict[str, float] = {}
+    for k, v in d.items():
+        try:
+            out[str(k)] = float(v)
+        except Exception:
+            continue
+    return out
 
 class AzureCompatibleLLM(LargeLanguageModel):
     """
     Azure-like Responses gateway.
-    {base_url}/openai/deployments/{deployment_id}/chat/completions?api-version=fake
+    {base_url}/openai/deployments/{deployment_id}/chat/completions?api-version={api_version}
     OpenAI models (gpt-*, o3) stream natively; others simulate streaming.
     """
 
@@ -93,7 +173,7 @@ class AzureCompatibleLLM(LargeLanguageModel):
         stream: bool = True,
         user: Optional[str] = None,
     ) -> Union[LLMResult, Generator[LLMResultChunk, None, None]]:
-        del user  # Not used by the gateway
+                
         mp = model_parameters or {}
         serialized_messages = self._serialize_messages(prompt_messages)
         serialized_tools = self._serialize_tools(tools)
@@ -107,10 +187,15 @@ class AzureCompatibleLLM(LargeLanguageModel):
         )
 
         base_url = credentials["base_url"].rstrip("/")
-        url = f"{base_url}/openai/deployments/{model}/chat/completions?api-version=fake"
+        use_deployid = bool(credentials.get("use_deployid","true") == "true")
+        if use_deployid:
+            api_version = credentials.get("api_version", "2024-02-15-preview")
+            url = f"{base_url}/openai/deployments/{model}/chat/completions?api-version={api_version}"
+        else:
+            url = f"{base_url}/chat/completions?"
         headers = _headers(credentials["api_key"])
-        timeout_sync = self._get_timeout(credentials.get("timeout_sync"), default=60.0)
-        timeout_stream = self._get_timeout(credentials.get("timeout_async"), default=300.0)
+        timeout_sync = self._get_timeout(credentials.get("timeout_sync"), default=300.0)
+        timeout_stream = self._get_timeout(credentials.get("timeout_async"), default=1800.0)
         pseudo_chunks = max(int(credentials.get("pseudo_sse_chunks") or 2), 1)
 
         if stream:
@@ -133,9 +218,12 @@ class AzureCompatibleLLM(LargeLanguageModel):
                 chunk_count=pseudo_chunks,
             )
 
-        with _client_read_timeout(timeout_sync) as client:
-            response = _post_with_retry(client, url, headers, payload)
-            data = response.json()
+        try:
+            with _client_read_timeout(timeout_sync) as client:
+                response = _post_with_retry(client, url, headers, payload)
+                data = response.json()
+        except Exception as e:
+            raise self._invoke_error_mapping(e)
 
         text = self._extract_text(data)
         usage, has_usage = self._usage_from_dict(data.get("usage"))
@@ -165,6 +253,28 @@ class AzureCompatibleLLM(LargeLanguageModel):
         if total_chars <= 0:
             return max(1, len(prompt_messages))
         return max(1, (total_chars + 3) // 4)  # Rough 4 chars ≈ 1 token heuristic
+    
+    def validate_credentials(self, credentials: dict) -> None:
+        base = (credentials.get("base_url") or "").strip()
+        if not base:
+            raise ValueError("Missing credential: base_url")
+        if not credentials.get("api_key"):
+            raise ValueError("Missing credential: api_key")
+        # 形式簡易チェック
+        if base.startswith("http://") or base.startswith("https://"):
+            pass
+        else:
+            raise ValueError("base_url must start with http:// or https://")
+        for k in ("timeout_sync", "timeout_async"):
+            v = credentials.get(k)
+            if v not in (None, ""):
+                float(v)
+        pcs = credentials.get("pseudo_sse_chunks")
+        if pcs not in (None, ""):
+            n = int(pcs)
+            if n < 1:
+                raise ValueError("pseudo_sse_chunks must be >= 1")
+
 
     # ---------- stream helpers ----------
     def _iter_native_stream(
@@ -178,52 +288,55 @@ class AzureCompatibleLLM(LargeLanguageModel):
         stream_timeout: float,
     ) -> Generator[LLMResultChunk, None, None]:
         def iterator() -> Generator[LLMResultChunk, None, None]:
-            for event in _stream_sse(url, headers, payload, stream_timeout):
-                try:
-                    obj = json.loads(event)
-                except json.JSONDecodeError:
-                    yield self._build_chunk(
-                        model=model,
-                        prompt_messages=prompt_messages,
-                        system_fingerprint=None,
-                        index=0,
-                        content=event,
-                        finish_reason=None,
-                        usage=None,
-                    )
-                    continue
-
-                event_model = obj.get("model", model)
-                fingerprint = obj.get("system_fingerprint")
-                usage_dict = obj.get("usage")
-                usage, has_usage = self._usage_from_dict(usage_dict)
-
-                for choice in obj.get("choices", []):
-                    index = choice.get("index", 0)
-                    delta = choice.get("delta") or {}
-                    finish_reason = choice.get("finish_reason")
-
-                    if delta.get("content"):
+            try:
+                for event in _stream_sse(url, headers, payload, stream_timeout):
+                    try:
+                        obj = json.loads(event)
+                    except json.JSONDecodeError:
                         yield self._build_chunk(
-                            model=event_model,
+                            model=model,
                             prompt_messages=prompt_messages,
-                            system_fingerprint=fingerprint,
-                            index=index,
-                            content=delta["content"],
+                            system_fingerprint=None,
+                            index=0,
+                            content=event,
                             finish_reason=None,
                             usage=None,
                         )
+                        continue
 
-                    if finish_reason:
-                        yield self._build_chunk(
-                            model=event_model,
-                            prompt_messages=prompt_messages,
-                            system_fingerprint=fingerprint,
-                            index=index,
-                            content="",
-                            finish_reason=finish_reason,
-                            usage=usage if has_usage else None,
-                        )
+                    event_model = obj.get("model", model)
+                    fingerprint = obj.get("system_fingerprint")
+                    usage_dict = obj.get("usage")
+                    usage, has_usage = self._usage_from_dict(usage_dict)
+
+                    for choice in obj.get("choices", []):
+                        index = choice.get("index", 0)
+                        delta = choice.get("delta") or {}
+                        finish_reason = choice.get("finish_reason")
+
+                        if delta.get("content"):
+                            yield self._build_chunk(
+                                model=event_model,
+                                prompt_messages=prompt_messages,
+                                system_fingerprint=fingerprint,
+                                index=index,
+                                content=delta["content"],
+                                finish_reason=None,
+                                usage=None,
+                            )
+
+                        if finish_reason:
+                            yield self._build_chunk(
+                                model=event_model,
+                                prompt_messages=prompt_messages,
+                                system_fingerprint=fingerprint,
+                                index=index,
+                                content="",
+                                finish_reason=finish_reason,
+                                usage=usage if has_usage else None,
+                            )
+            except Exception as e:
+                raise self._invoke_error_mapping(e)
         return iterator()
 
     def _iter_pseudo_stream(
@@ -238,9 +351,12 @@ class AzureCompatibleLLM(LargeLanguageModel):
         chunk_count: int,
     ) -> Generator[LLMResultChunk, None, None]:
         def iterator() -> Generator[LLMResultChunk, None, None]:
-            with _client_read_timeout(timeout) as client:
-                response = _post_with_retry(client, url, headers, payload)
-                data = response.json()
+            try:
+                with _client_read_timeout(timeout) as client:
+                    response = _post_with_retry(client, url, headers, payload)
+                    data = response.json()
+            except Exception as e:
+                raise self._invoke_error_mapping(e)
 
             text = self._extract_text(data)
             usage, has_usage = self._usage_from_dict(data.get("usage"))
@@ -308,57 +424,55 @@ class AzureCompatibleLLM(LargeLanguageModel):
         return item
 
     def _normalize_tool_call(self, tool_call: Any) -> dict:
-        if hasattr(tool_call, "model_dump"):
-            return tool_call.model_dump(mode="json", exclude_none=True)
-        if hasattr(tool_call, "dict"):
-            return tool_call.dict(exclude_none=True)
-        if isinstance(tool_call, dict):
-            return tool_call
-        function = getattr(tool_call, "function", None)
-        function_payload = {}
-        if function is not None:
-            if hasattr(function, "model_dump"):
-                function_payload = function.model_dump(mode="json", exclude_none=True)
-            elif hasattr(function, "dict"):
-                function_payload = function.dict(exclude_none=True)
-            elif isinstance(function, dict):
-                function_payload = function
+        # どんな型でも dict へ潰す（callableは除去）
+        d = _as_dict(tool_call)
+        # 既に OpenAI 形式なら minimum validation
+        t = d.get("type")
+        if t == "function" and isinstance(d.get("function"), (dict,)):
+            fn = d["function"]
+            # parameters を dict 化（callable / 文字列 JSON も潰す）
+            fn["parameters"] = _as_dict(fn.get("parameters"))
+            # name/description が callable など不正な場合は文字列化
+            name = fn.get("name")
+            if not isinstance(name, str):
+                fn["name"] = str(name) if name is not None else "function"
+            desc = fn.get("description")
+            if desc is not None and not isinstance(desc, str):
+                fn["description"] = str(desc)
+            d["function"] = fn
+            return d
+
+        # 旧式や独自型 → OpenAI 形式に合成
+        name = d.get("name") or getattr(tool_call, "name", None) or "function"
+        description = d.get("description") or getattr(tool_call, "description", None)
+        parameters = d.get("parameters")
+        if parameters is None:
+            parameters = getattr(tool_call, "parameters", None)
+        parameters = _as_dict(parameters)  # ここで callable を排除
+
         return {
-            "id": getattr(tool_call, "id", None),
-            "type": getattr(tool_call, "type", "function"),
-            "function": function_payload,
+            "type": "function",
+            "function": {
+                "name": name if isinstance(name, str) else "function",
+                "description": description if isinstance(description, str) else None,
+                "parameters": parameters,
+            },
         }
 
     def _serialize_tools(self, tools: Optional[list[PromptMessageTool]]) -> Optional[list[dict]]:
         if not tools:
             return None
-        serialized_tools: list[dict] = []
+        out: list[dict] = []
         for tool in tools:
             if tool is None:
                 continue
-            if hasattr(tool, "model_dump"):
-                tool_dict = tool.model_dump(mode="json", exclude_none=True)
-            elif hasattr(tool, "dict"):
-                tool_dict = tool.dict(exclude_none=True)
-            elif isinstance(tool, dict):
-                tool_dict = dict(tool)
-            else:
-                tool_dict = {
-                    "name": getattr(tool, "name", ""),
-                    "description": getattr(tool, "description", ""),
-                    "parameters": getattr(tool, "parameters", {}),
-                }
-            if "type" not in tool_dict:
-                tool_dict = {
-                    "type": "function",
-                    "function": {
-                        "name": tool_dict.get("name"),
-                        "description": tool_dict.get("description"),
-                        "parameters": tool_dict.get("parameters", {}),
-                    },
-                }
-            serialized_tools.append(tool_dict)
-        return serialized_tools or None
+            # どんな入力でも _normalize_tool_call で強制整形
+            try:
+                out.append(self._normalize_tool_call(tool))
+            except Exception as e:
+                _get_logger().warning("skip invalid tool: %r error=%s", tool, e)
+                continue
+        return out or None
 
     # ---------- payload helpers ----------
     def _build_chat_payload(
@@ -449,10 +563,18 @@ class AzureCompatibleLLM(LargeLanguageModel):
                         yield text
 
     @staticmethod
-    def _usage_from_dict(usage: Any) -> tuple[LLMUsage, bool]:
+    def _usage_from_dict(usage: Any) -> tuple[Optional[LLMUsage], bool]:
+        """
+        SDK バージョン差異に耐える LLMUsage 構築ヘルパ。
+        - LLMUsage.from_metadata が無い環境でも動く
+        - LLMUsage.empty_usage も不要にする
+        - 生成できない場合は (None, False) を返す
+        """
+        # 正規化
+        meta: Dict[str, Any] = {}
         if isinstance(usage, dict):
-            metadata: Dict[str, Any] = {}
-            for key in (
+            # よく使うキーをそのまま拾う＋将来の拡張に備えて残りは metadata として保持
+            for k in (
                 "prompt_tokens",
                 "completion_tokens",
                 "total_tokens",
@@ -466,10 +588,49 @@ class AzureCompatibleLLM(LargeLanguageModel):
                 "completion_price",
                 "latency",
             ):
-                if usage.get(key) is not None:
-                    metadata[key] = usage[key]
-            return LLMUsage.from_metadata(metadata), True
-        return LLMUsage.empty_usage(), False
+                if usage.get(k) is not None:
+                    meta[k] = usage[k]
+            # その他のキーも落とさず持っておく
+            for k, v in usage.items():
+                if k not in meta:
+                    meta[k] = v
+        elif usage is None:
+            meta = {}
+        else:
+            # dict 以外は一旦文字列化して格納
+            meta = {"raw": str(usage)}
+
+        # いくつかのコンストラクタ候補で試す
+        candidates = [
+            # 代表的: 個別トークン数を与える型
+            dict(
+                prompt_tokens=meta.get("prompt_tokens"),
+                completion_tokens=meta.get("completion_tokens"),
+                total_tokens=meta.get("total_tokens"),
+                metadata=meta,
+            ),
+            # metadata だけ与える型
+            dict(metadata=meta),
+            # そのまま渡せる型（将来の互換）
+            meta,
+            # 引数なし
+            dict(),
+        ]
+
+        for params in candidates:
+            # None は渡さない（TypeError を避ける）
+            clean = {k: v for k, v in params.items() if v is not None}
+            try:
+                obj = LLMUsage(**clean)  # type: ignore
+                return obj, True
+            except TypeError:
+                continue
+            except Exception:
+                continue
+
+        # どうしても作れない場合
+        return None, False
+
 
     def _build_chunk(
         self,
@@ -523,3 +684,57 @@ class AzureCompatibleLLM(LargeLanguageModel):
         if isinstance(data.get("output_text"), str):
             return data["output_text"]
         return json.dumps(data, ensure_ascii=False)
+    
+    def _invoke_error_mapping(self, exc: Exception) -> Exception:
+        """
+        Normalize httpx/network/HTTP errors into readable exceptions.
+        This name (with leading underscore) matches the ABC in some SDK versions.
+        """
+        import httpx
+
+        # Network-level
+        if isinstance(exc, (httpx.ConnectError, httpx.ProxyError)):
+            return ConnectionError(f"network_unreachable: {exc}")
+        if isinstance(exc, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+            return TimeoutError(f"timeout: {exc}")
+
+        # HTTP status
+        if isinstance(exc, httpx.HTTPStatusError):
+            r = exc.response
+            sc = r.status_code
+            info = _parse_gateway_error_text(r.text)
+            code = (info.get("code") or "http_error").lower()
+            msg = info.get("message") or r.text
+
+            # normalize common codes
+            if code in ("429", "rate_limit_exceeded", "rate_limit", "too_many_requests", "insufficient_quota"):
+                code = "rate_limited"
+            if code in ("deploymentnotfound", "model_not_found", "not_found"):
+                code = "model_not_found"
+            if code in ("invalid_request_error", "validation_error", "bad_request"):
+                code = "invalid_request"
+
+            norm = f"{sc} {code}: {msg}".strip()
+
+            if sc == 400 or code == "invalid_request":
+                return ValueError(norm)
+            if sc in (401, 403):
+                return PermissionError(norm)
+            if sc == 404 or code == "model_not_found":
+                return FileNotFoundError(norm)
+            if sc == 409:
+                return RuntimeError(f"conflict: {norm}")
+            if sc == 422:
+                return ValueError(f"validation_error: {norm}")
+            if sc == 429 or code == "rate_limited":
+                return RuntimeError(f"rate_limited: {norm}")
+            if 500 <= sc < 600:
+                return RuntimeError(f"upstream_error: {norm}")
+            return RuntimeError(norm)
+
+        # default passthrough
+        return exc
+
+    # ---- compatibility: some SDKs expect invoke_error_mapping (no underscore) ----
+    def invoke_error_mapping(self, exc: Exception) -> Exception:  # pragma: no cover
+        return self._invoke_error_mapping(exc)

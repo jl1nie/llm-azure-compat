@@ -1,6 +1,6 @@
-model: o3
+model: openai/gpt-oss-20b
 label:
-  en_US: OpenAI o3 (Reasoning)
+  en_US: OpenAI GPT-20B OSS
 model_type: llm
 features:
   - vision
@@ -15,7 +15,7 @@ parameter_rules:
     min: 0
     max: 2
     default: 0.7
-
+    
   - name: top_p
     use_template: top_p
     default: 1
@@ -23,20 +23,17 @@ parameter_rules:
   - name: max_tokens
     type: int
     min: 1
-    max: 32768
-    default: 32768
+    max: 8192
+    default: 8192
+
+  - name: enable_vision
+    type: boolean
+    default: false
 
   - name: json_response
     type: boolean
     default: false
-  
-  - name: json_schema
-    type: string
-  
-  - name: enable_vision
-    type: boolean
-    default: false
-  
+
   - name: thinking
     type: boolean
-    default: true
+    default: false
