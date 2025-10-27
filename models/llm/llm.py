@@ -28,7 +28,9 @@ def _headers(api_key: str) -> dict:
 
 def _client_read_timeout(seconds: float) -> httpx.Client:
     # Use system CA certificates; do not override verify.
-    return httpx.Client(timeout=httpx.Timeout(read=seconds, connect=10.0, write=10.0, pool=10.0))
+    return httpx.Client(
+        timeout=httpx.Timeout(read=seconds, connect=10.0, write=10.0, pool=10.0)
+    )
 
 
 def _post_with_retry(
@@ -43,7 +45,9 @@ def _post_with_retry(
         try:
             response = client.post(url, headers=headers, json=json_body)
             if response.status_code in (429, 500, 502, 503, 504):
-                raise httpx.HTTPStatusError("retryable", request=response.request, response=response)
+                raise httpx.HTTPStatusError(
+                    "retryable", request=response.request, response=response
+                )
             response.raise_for_status()
             return response
         except (httpx.HTTPStatusError, httpx.ConnectError, httpx.ReadTimeout):
@@ -53,7 +57,9 @@ def _post_with_retry(
             backoff *= 2
 
 
-def _stream_sse(url: str, headers: dict, payload: dict, stream_timeout: float) -> Iterable[str]:
+def _stream_sse(
+    url: str, headers: dict, payload: dict, stream_timeout: float
+) -> Iterable[str]:
     """Yield 'data: ...' payloads from an SSE response as UTF-8 strings."""
     timeout = httpx.Timeout(read=stream_timeout, connect=10.0, write=10.0, pool=10.0)
     with httpx.Client(timeout=timeout) as sse_client:
@@ -74,6 +80,7 @@ def _stream_sse(url: str, headers: dict, payload: dict, stream_timeout: float) -
                             return
                         yield data.decode("utf-8", errors="ignore")
 
+
 def _parse_gateway_error_text(text: str) -> dict:
     """
     いろいろなゲートウェイ/SDKが返す error ボディをできるだけ正規化して抽出する。
@@ -83,6 +90,7 @@ def _parse_gateway_error_text(text: str) -> dict:
       - {"message": "..."} または {"detail": "..."}
       - 二重JSON（例: {"message": "{\"error_type\":\"TypeError\",\"message\":\"...\"}"}）
     """
+
     def _coerce_obj(s: str):
         try:
             return json.loads(s)
@@ -108,7 +116,11 @@ def _parse_gateway_error_text(text: str) -> dict:
                 nested = _coerce_obj(inner)
                 if isinstance(nested, dict):
                     # {"error_type": "...", "message": "..."} など
-                    code = nested.get("code") or nested.get("error_type") or "unknown_error"
+                    code = (
+                        nested.get("code")
+                        or nested.get("error_type")
+                        or "unknown_error"
+                    )
                     msg = nested.get("message") or nested.get("detail") or inner
                     return {"code": str(code), "message": str(msg)}
                 return {"code": "error", "message": inner}
@@ -118,7 +130,13 @@ def _parse_gateway_error_text(text: str) -> dict:
                 return {"code": str(code), "message": str(msg)}
 
     # それ以外は丸ごと
-    return {"code": "unknown_error", "message": text if isinstance(text, str) else json.dumps(obj, ensure_ascii=False)}
+    return {
+        "code": "unknown_error",
+        "message": (
+            text if isinstance(text, str) else json.dumps(obj, ensure_ascii=False)
+        ),
+    }
+
 
 def _as_dict(obj: Any, *, default: dict | None = None) -> dict:
     """Pydantic / dataclass / mapping / JSON文字列 / その他 -> dict に正規化"""
@@ -144,6 +162,7 @@ def _as_dict(obj: Any, *, default: dict | None = None) -> dict:
     except Exception:
         return {} if default is None else default
 
+
 def _as_number_map(obj: Any) -> dict[str, float]:
     """OpenAI 互換の logit_bias など: dict[str, float] 以外は空に"""
     d = _as_dict(obj)
@@ -154,6 +173,7 @@ def _as_number_map(obj: Any) -> dict[str, float]:
         except Exception:
             continue
     return out
+
 
 class AzureCompatibleLLM(LargeLanguageModel):
     """
@@ -173,21 +193,23 @@ class AzureCompatibleLLM(LargeLanguageModel):
         stream: bool = True,
         user: Optional[str] = None,
     ) -> Union[LLMResult, Generator[LLMResultChunk, None, None]]:
-                
+
         mp = model_parameters or {}
         serialized_messages = self._serialize_messages(prompt_messages)
         serialized_tools = self._serialize_tools(tools)
         is_openai = self._is_openai(model)
+        audit_user = credentials.get("audit_user", "default_user")
         payload = self._build_chat_payload(
             messages=serialized_messages,
             tools=serialized_tools,
             mp=mp,
             stream=bool(stream and is_openai),
             stop=stop,
+            user=audit_user,
         )
 
         base_url = credentials["base_url"].rstrip("/")
-        use_deployid = bool(credentials.get("use_deployid","true") == "true")
+        use_deployid = bool(credentials.get("use_deployid", "true") == "true")
         if use_deployid:
             api_version = credentials.get("api_version", "2024-02-15-preview")
             url = f"{base_url}/openai/deployments/{model}/chat/completions?api-version={api_version}"
@@ -195,7 +217,9 @@ class AzureCompatibleLLM(LargeLanguageModel):
             url = f"{base_url}/chat/completions?"
         headers = _headers(credentials["api_key"])
         timeout_sync = self._get_timeout(credentials.get("timeout_sync"), default=300.0)
-        timeout_stream = self._get_timeout(credentials.get("timeout_async"), default=1800.0)
+        timeout_stream = self._get_timeout(
+            credentials.get("timeout_async"), default=1800.0
+        )
         pseudo_chunks = max(int(credentials.get("pseudo_sse_chunks") or 2), 1)
 
         if stream:
@@ -253,7 +277,7 @@ class AzureCompatibleLLM(LargeLanguageModel):
         if total_chars <= 0:
             return max(1, len(prompt_messages))
         return max(1, (total_chars + 3) // 4)  # Rough 4 chars ≈ 1 token heuristic
-    
+
     def validate_credentials(self, credentials: dict) -> None:
         base = (credentials.get("base_url") or "").strip()
         if not base:
@@ -274,7 +298,6 @@ class AzureCompatibleLLM(LargeLanguageModel):
             n = int(pcs)
             if n < 1:
                 raise ValueError("pseudo_sse_chunks must be >= 1")
-
 
     # ---------- stream helpers ----------
     def _iter_native_stream(
@@ -337,6 +360,7 @@ class AzureCompatibleLLM(LargeLanguageModel):
                             )
             except Exception as e:
                 raise self._invoke_error_mapping(e)
+
         return iterator()
 
     def _iter_pseudo_stream(
@@ -389,6 +413,7 @@ class AzureCompatibleLLM(LargeLanguageModel):
                     finish_reason="stop" if is_last else None,
                     usage=usage if is_last and has_usage else None,
                 )
+
         return iterator()
 
     # ---------- serialization helpers ----------
@@ -408,9 +433,13 @@ class AzureCompatibleLLM(LargeLanguageModel):
                 }
 
             if isinstance(raw.get("content"), list):
-                raw["content"] = [self._normalize_content_item(item) for item in raw["content"]]
+                raw["content"] = [
+                    self._normalize_content_item(item) for item in raw["content"]
+                ]
             if isinstance(raw.get("tool_calls"), list):
-                raw["tool_calls"] = [self._normalize_tool_call(call) for call in raw["tool_calls"]]
+                raw["tool_calls"] = [
+                    self._normalize_tool_call(call) for call in raw["tool_calls"]
+                ]
             serialized.append(raw)
         return serialized
 
@@ -459,20 +488,87 @@ class AzureCompatibleLLM(LargeLanguageModel):
             },
         }
 
-    def _serialize_tools(self, tools: Optional[list[PromptMessageTool]]) -> Optional[list[dict]]:
+    def _serialize_tools(
+        self, tools: Optional[list[PromptMessageTool]]
+    ) -> Optional[list[dict]]:
         if not tools:
             return None
         out: list[dict] = []
-        for tool in tools:
+        for idx, tool in enumerate(tools):
             if tool is None:
                 continue
             # どんな入力でも _normalize_tool_call で強制整形
             try:
-                out.append(self._normalize_tool_call(tool))
-            except Exception as e:
-                # skip invalid tool
-                continue
+                normalized = self._normalize_tool_call(tool)
+            except Exception as exc:
+                raise ValueError(
+                    f"Invalid tool definition at index {idx}: {exc}"
+                ) from exc
+            if not self._is_valid_tool(normalized):
+                raise ValueError(
+                    f"Invalid tool definition at index {idx}: malformed tool payload"
+                )
+            out.append(normalized)
         return out or None
+
+    def _normalize_tool_choice(self, tool_choice: Any, tools: list[dict]) -> Any:
+        if tool_choice is None:
+            return None
+
+        valid_names = {
+            item["function"]["name"]
+            for item in tools
+            if isinstance(item, dict)
+            and item.get("type") == "function"
+            and isinstance(item.get("function"), dict)
+            and isinstance(item["function"].get("name"), str)
+        }
+
+        if not valid_names:
+            if isinstance(tool_choice, str) and tool_choice in {"auto", "none"}:
+                return tool_choice
+            return None
+
+        try:
+            if isinstance(tool_choice, str):
+                if tool_choice in {"auto", "none"}:
+                    return tool_choice
+                if tool_choice in valid_names:
+                    return {"type": "function", "function": {"name": tool_choice}}
+                return None
+
+            if isinstance(tool_choice, dict):
+                choice_type = tool_choice.get("type")
+                if choice_type in {"auto", "none"}:
+                    return choice_type
+                if choice_type == "function":
+                    function_block = tool_choice.get("function")
+                    if isinstance(function_block, dict):
+                        name = function_block.get("name")
+                        if isinstance(name, str) and name in valid_names:
+                            return {"type": "function", "function": {"name": name}}
+                return None
+        except Exception:
+            return None
+
+        return None
+
+    @staticmethod
+    def _is_valid_tool(tool: Any) -> bool:
+        if not isinstance(tool, dict):
+            return False
+        if tool.get("type") != "function":
+            return False
+        function_block = tool.get("function")
+        if not isinstance(function_block, dict):
+            return False
+        name = function_block.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return False
+        parameters = function_block.get("parameters")
+        if parameters is not None and not isinstance(parameters, dict):
+            return False
+        return True
 
     # ---------- payload helpers ----------
     def _build_chat_payload(
@@ -483,55 +579,53 @@ class AzureCompatibleLLM(LargeLanguageModel):
         mp: dict,
         stream: bool,
         stop: Optional[list[str]],
+        user: str,
     ) -> dict:
-        max_tokens = mp.get("max_tokens", mp.get("max_output_tokens"))
-        body: Dict[str, Any] = {
-            "messages": messages,
-            "stream": stream,
-        }
+        tool_choice_param = mp.get("tool_choice")
+        body: Dict[str, Any] = {"messages": messages, "stream": stream, "user": user}
 
+        max_tokens = self._coerce_int(mp.get("max_tokens", mp.get("max_output_tokens")))
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
-        if mp.get("temperature") is not None:
-            body["temperature"] = mp["temperature"]
-        if mp.get("top_p") is not None:
-            body["top_p"] = mp["top_p"]
+
+        temperature = self._coerce_float(mp.get("temperature"))
+        if temperature is not None:
+            body["temperature"] = temperature
+
+        top_p = self._coerce_float(mp.get("top_p"))
+        if top_p is not None:
+            body["top_p"] = top_p
+
         if stop:
             body["stop"] = stop
-        if mp.get("presence_penalty") is not None:
-            body["presence_penalty"] = mp["presence_penalty"]
-        if mp.get("frequency_penalty") is not None:
-            body["frequency_penalty"] = mp["frequency_penalty"]
-        if mp.get("logit_bias") is not None:
-            body["logit_bias"] = mp["logit_bias"]
-        if mp.get("n") is not None:
-            body["n"] = mp["n"]
-        if mp.get("seed") is not None:
-            body["seed"] = mp["seed"]
-        if mp.get("tool_choice") is not None:
-            body["tool_choice"] = mp["tool_choice"]
-        if mp.get("json_response"):
-            body["response_format"] = {"type": "json_object"}
-            schema = mp.get("json_schema")
-            if schema:
-                try:
-                    if isinstance(schema, str):
-                        schema = json.loads(schema)
-                    body["response_format"] = {"type": "json_schema", "json_schema": schema}
-                except Exception:
-                    pass
-        if mp.get("thinking"):
-            body["reasoning"] = {"effort": "medium"}
+
+        presence_penalty = self._coerce_float(mp.get("presence_penalty"))
+        if presence_penalty is not None:
+            body["presence_penalty"] = presence_penalty
+
+        frequency_penalty = self._coerce_float(mp.get("frequency_penalty"))
+        if frequency_penalty is not None:
+            body["frequency_penalty"] = frequency_penalty
+
+        logit_bias = self._coerce_logit_bias(mp.get("logit_bias"))
+        if logit_bias is not None:
+            body["logit_bias"] = logit_bias
+
+        n = self._coerce_int(mp.get("n"))
+        if n is not None:
+            body["n"] = n
+
+        seed = self._coerce_int(mp.get("seed"))
+        if seed is not None:
+            body["seed"] = seed
+        # if mp.get("thinking"):
+        #     body["reasoning"] = {"effort": "medium"}
 
         if tools:
             body["tools"] = tools
-            functions = []
-            for item in tools:
-                if isinstance(item, dict) and item.get("type") == "function" and isinstance(item.get("function"), dict):
-                    functions.append(item["function"])
-            if functions:
-                body["functions"] = functions
-                body.setdefault("function_call", "auto")
+            normalized_choice = self._normalize_tool_choice(tool_choice_param, tools)
+            if normalized_choice is not None:
+                body["tool_choice"] = normalized_choice
 
         return body
 
@@ -546,6 +640,31 @@ class AzureCompatibleLLM(LargeLanguageModel):
             return float(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _coerce_float(value: Any) -> Optional[float]:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _coerce_int(value: Any) -> Optional[int]:
+        if value in (None, ""):
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _coerce_logit_bias(value: Any) -> Optional[dict[str, float]]:
+        if value in (None, "", {}):
+            return None
+        bias = _as_number_map(value)
+        return bias or None
 
     def _message_text_fragments(self, message: PromptMessage) -> Iterable[str]:
         content = getattr(message, "content", None)
@@ -631,7 +750,6 @@ class AzureCompatibleLLM(LargeLanguageModel):
         # どうしても作れない場合
         return None, False
 
-
     def _build_chunk(
         self,
         *,
@@ -661,7 +779,9 @@ class AzureCompatibleLLM(LargeLanguageModel):
                 segments: list[str] = []
                 for item in data["output"]:
                     for content in item.get("content", []):
-                        text = content.get("text") if isinstance(content, dict) else None
+                        text = (
+                            content.get("text") if isinstance(content, dict) else None
+                        )
                         if isinstance(text, str):
                             segments.append(text)
                 if segments:
@@ -669,11 +789,15 @@ class AzureCompatibleLLM(LargeLanguageModel):
 
             if isinstance(data.get("choices"), list):
                 message_text = "".join(
-                    choice.get("message", {}).get("content", "") for choice in data["choices"]
+                    choice.get("message", {}).get("content", "")
+                    for choice in data["choices"]
                 )
                 if message_text:
                     return message_text
-                delta_text = "".join(choice.get("delta", {}).get("content", "") for choice in data["choices"])
+                delta_text = "".join(
+                    choice.get("delta", {}).get("content", "")
+                    for choice in data["choices"]
+                )
                 if delta_text:
                     return delta_text
         except Exception:
@@ -684,7 +808,7 @@ class AzureCompatibleLLM(LargeLanguageModel):
         if isinstance(data.get("output_text"), str):
             return data["output_text"]
         return json.dumps(data, ensure_ascii=False)
-    
+
     def _invoke_error_mapping(self, exc: Exception) -> Exception:
         """
         Normalize httpx/network/HTTP errors into readable exceptions.
@@ -707,7 +831,13 @@ class AzureCompatibleLLM(LargeLanguageModel):
             msg = info.get("message") or r.text
 
             # normalize common codes
-            if code in ("429", "rate_limit_exceeded", "rate_limit", "too_many_requests", "insufficient_quota"):
+            if code in (
+                "429",
+                "rate_limit_exceeded",
+                "rate_limit",
+                "too_many_requests",
+                "insufficient_quota",
+            ):
                 code = "rate_limited"
             if code in ("deploymentnotfound", "model_not_found", "not_found"):
                 code = "model_not_found"

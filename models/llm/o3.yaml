@@ -1,6 +1,6 @@
-model: o3
+model: openaio3
 label:
-  en_US: OpenAI o3 (Reasoning)
+  en_US: openaio3
 model_type: llm
 features:
   - vision
@@ -26,13 +26,6 @@ parameter_rules:
     max: 32768
     default: 32768
 
-  - name: json_response
-    type: boolean
-    default: false
-  
-  - name: json_schema
-    type: string
-  
   - name: enable_vision
     type: boolean
     default: false

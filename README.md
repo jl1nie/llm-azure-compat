@@ -5,7 +5,7 @@ An Azure-styled gateway for Dify that maps deployment IDs directly to model name
 ## Features
 - Native SSE streaming for OpenAI models (`gpt-*`, `o3`) with automatic parsing of Responses events.
 - Pseudo-SSE streaming for non-OpenAI chat models (Claude, Gemini) with configurable chunk counts.
-- Transparent passthrough for JSON mode (`json_response`, `json_schema`) and reasoning requests (`thinking → reasoning.effort=medium`).
+- Transparent passthrough for `json_schema` payload hints (when upstream supports them) and reasoning requests (`thinking → reasoning.effort=medium`).
 - Shared credential form: `base_url`, `api_key`, optional `api_version`, deployment-path toggle, per-call timeouts, and pseudo-SSE chunk count.
 - Vision toggles: `enable_vision` simply forwards the vision modality flag while messages remain untouched.
 

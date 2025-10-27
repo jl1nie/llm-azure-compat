@@ -1,6 +1,6 @@
 model: gpt-5
 label:
-  en_US: OpenAI GPT-5
+  en_US: gpt-5
 model_type: llm
 features:
   - vision
@@ -25,13 +25,6 @@ parameter_rules:
     min: 1
     max: 32768
     default: 32768
-
-  - name: json_response
-    type: boolean
-    default: false
-
-  - name: json_schema
-    type: string
 
   - name: enable_vision
     type: boolean

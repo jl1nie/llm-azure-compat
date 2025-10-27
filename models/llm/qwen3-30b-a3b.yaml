@@ -1,6 +1,6 @@
 model: qwen/qwen3-30b-a3b-2507
 label:
-  en_US: Alibaba Qwen3-30B-A3B
+  en_US: qwen3-30b-a3b-2507
 model_type: llm
 features:
   - vision
@@ -27,10 +27,6 @@ parameter_rules:
     default: 8192
 
   - name: enable_vision
-    type: boolean
-    default: false
-
-  - name: json_response
     type: boolean
     default: false
 

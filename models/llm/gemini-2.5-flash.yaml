@@ -1,6 +1,6 @@
 model: gemini-2.5-flash
 label:
-  en_US: Google Gemini 2.5 Flash
+  en_US: gemini-2.5-flash
 model_type: llm
 features:
   - vision
@@ -27,10 +27,6 @@ parameter_rules:
     default: 65535
 
   - name: enable_vision
-    type: boolean
-    default: false
-
-  - name: json_response
     type: boolean
     default: false
 

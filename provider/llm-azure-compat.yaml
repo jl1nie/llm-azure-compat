@@ -23,6 +23,11 @@ provider_credential_schema:
         en_US: API Key
       type: secret-input
       required: true
+    - variable: audit_user
+      label:
+        en_US: Audit User e-mail
+      type: text-input
+      required: true
     - variable: api_version
       label:
         en_US: API version
